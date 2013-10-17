@@ -30,7 +30,7 @@ static void simplechar_dev_release(struct device* dev)
 // 在/sys/devices/platform/生成目录：simplechar
 struct platform_device simplechar_device = {
     .name    = "simplechar",
-    .id      = -1,  // 注：如何为1，则生成目录：simplechar.1
+    .id      = -1,  // 注：如为1，则生成目录：simplechar.1
     .dev     = {
         .platform_data = &foo_pdata,
         .release = &simplechar_dev_release,
