@@ -1,0 +1,10 @@
+/home/latelee/driver-test/scull/scull/scull.c:31: error: expected ‘=’, ‘,’, ‘;’, ‘asm’ or ‘__attribute__’ before ‘int’
+/home/latelee/driver-test/scull/scull/scull.c: In function ‘scull_cleanup_module’:
+/home/latelee/driver-test/scull/scull/scull.c:213: error: ‘scull_devices’ undeclared (first use in this function)
+/home/latelee/driver-test/scull/scull/scull.c:213: error: (Each undeclared identifier is reported only once
+/home/latelee/driver-test/scull/scull/scull.c:213: error: for each function it appears in.)
+/home/latelee/driver-test/scull/scull/scull.c: In function ‘scull_init_module’:
+/home/latelee/driver-test/scull/scull/scull.c:256: error: ‘scull_devices’ undeclared (first use in this function)
+make[2]: *** [/home/latelee/driver-test/scull/scull/scull.o] Error 1
+make[1]: *** [_module_/home/latelee/driver-test/scull/scull] Error 2
+make: *** [all] Error 1
