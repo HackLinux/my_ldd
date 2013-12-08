@@ -13,11 +13,36 @@ enum {
     CMD_BUFF2,
     CMD_CLEAR,
     CMD_SET,
+    CMD_TEST,
 };
 
 #define device "/dev/foo"
 
-int main(void)
+typedef struct foo_t
+{
+    int id;
+    char buffer[16];
+} foo_t;
+
+int test_lock()
+{
+	int fd;
+    foo_t foo;
+
+	fd = open(device, O_RDWR);
+	if (fd < 0)
+	{
+		perror("Open device faile!");
+		return -1;
+	}
+
+    ioctl(fd, CMD_TEST, NULL);
+
+	close(fd);
+    return 0;
+}
+
+int test_ioctl()
 {
 	int fd;
 	char buf[] = "THis is the voice from www.latelee.org";
@@ -47,5 +72,12 @@ int main(void)
 	//len = read(fd, buf2, 32);
 	//printf("buf2: %s %d\n", buf2, len);
 	close(fd);
+    return 0;
+}
+
+int main(void)
+{
+    // test_ioctl();
+    test_lock();
 	return 0;
 }

@@ -96,9 +96,10 @@ static ssize_t foo_write(struct file *filp, const char *buf, size_t count, loff_
     return ret;
 }
 
-static int foo_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg)
+// 2.6.36以下版本使用下列接口
+//static int foo_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg)
 // 2.6.36及以上版本使用下列函数
-// static long foo_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+static long foo_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     return 0;
 }
@@ -109,9 +110,10 @@ static struct file_operations foo_fops = {
     .release = foo_release,
     .read    = foo_read,
     .write   = foo_write,
-    .ioctl   = foo_ioctl,
+// 2.6.36以下版本使用下列接口
+//    .ioctl   = foo_ioctl,
 //2.6.36及以上版本使用下列接口
-//    .unlocked_ioctl   = foo_ioctl,
+    .unlocked_ioctl   = foo_ioctl,
 };
 
 

@@ -22,7 +22,7 @@ static struct simplechar_platdata foo_pdata = {
 // 避免删掉模块时出现警告
 static void simplechar_dev_release(struct device* dev)
 {
-    printk(KERN_NOTICE "do %s case of: Device xxx does not have a release() function, it is broken and must be fixed.\n", __func__);
+    //printk(KERN_NOTICE "do %s case of: Device xxx does not have a release() function, it is broken and must be fixed.\n", __func__);
     return;
 }
 

@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>       /**< printk() */
 #include <linux/init.h>
+#include <linux/slab.h>         /**< kmalloc... */
 #include <linux/platform_device.h>
 
 #include <linux/cdev.h>         /**< cdev_* */
@@ -20,6 +21,9 @@
 #include <linux/types.h>        /**< size_t */
 #include <linux/errno.h>        /**< error codes */
 #include <linux/string.h>
+
+#include <linux/spinlock.h>
+#include <linux/delay.h>
 
 #include "simplechar.h"
 
@@ -59,6 +63,7 @@ enum {
     CMD_BUFF2,
     CMD_CLEAR,
     CMD_SET,
+    CMD_TEST,
 };
 
 struct cdev foo_cdev;
@@ -79,6 +84,10 @@ char g_buffer2[g_size] = {0};
 char* g_ptr = NULL;
 char* g_tmp = NULL;
 
+spinlock_t test_lock;
+
+static int open_cnt = 0;
+
 static int foo_open(struct inode *inode, struct file *filp)
 {
 	debug("in %s()\n", __func__);
@@ -90,6 +99,9 @@ static int foo_open(struct inode *inode, struct file *filp)
     strcpy(g_buffer2, "buffer2: ");
     g_ptr = g_buffer1;  // 默认指向第一个缓冲区
     g_tmp = g_ptr + NUM_PREFIX;
+    
+    open_cnt++;
+    printk("open %d\n", open_cnt);
 	return 0;
 }
 
@@ -161,11 +173,30 @@ static ssize_t foo_write(struct file *filp, const char *buf, size_t count, loff_
 	return ret;
 }
 
-static int foo_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long arg)
+static long foo_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     char tmp = arg;
+    int i = 0;
+
+    int sum = 0;
+    
 	switch (cmd)
 	{
+    // 多进程测试，加锁不加锁无影响。
+    case CMD_TEST:
+    {
+        static int cnt = 0;
+        cnt++;
+        //spin_lock(&test_lock);
+        for (i = 0; i < 10; i++)
+        {
+            sum = i+cnt;
+            printk("open idx: %d sleep cnt: %d %d\n", open_cnt, cnt, sum);
+            mdelay(300);
+        }
+        //spin_unlock(&test_lock);
+    }
+        break;
 	case CMD_BUFF1:
         g_ptr = g_buffer1;
         g_tmp = g_ptr + NUM_PREFIX;
@@ -195,7 +226,7 @@ static struct file_operations foo_fops = {
 	.release = foo_release,
 	.read    = foo_read,
 	.write   = foo_write,
-	.ioctl   = foo_ioctl,
+	.unlocked_ioctl   = foo_ioctl,
 };
 
 static inline struct simplechar *pdev_to_owndata(struct platform_device *dev)
@@ -253,7 +284,7 @@ static int simplechar_probe(struct platform_device *dev)
     strcpy(foo->buffer, "hello world");
 
     // 简单测试
-    simplechar_test(dev);
+    //simplechar_test(dev);
 
     // 字符设备
 	cdev_init(&foo_cdev, &foo_fops);
@@ -283,7 +314,6 @@ static int simplechar_probe(struct platform_device *dev)
 		return -EINVAL;
 	}
 
-    // 自动创建/dev下的节点，名称为DEV_NAME
     foo_class = class_create(THIS_MODULE, DEV_NAME);
     if (IS_ERR(foo_class))
     {
@@ -291,6 +321,7 @@ static int simplechar_probe(struct platform_device *dev)
         return -EINVAL;
     }
 
+    // 自动创建/dev下的节点，名称为DEV_NAME
     device_create(foo_class, NULL, MKDEV(foo_major, foo_minor), NULL, DEV_NAME);
 
     printk(KERN_NOTICE "register /dev/%s ok: major: %d minor: %d devno: 0x%08x\n", DEV_NAME, foo_major, foo_minor, foo_devno);
@@ -327,7 +358,9 @@ static int __init simplechar_drv_init(void)
         printk(KERN_NOTICE "platform_driver_register failed!\n");
         return ret;
     }
-    
+
+    spin_lock_init(&test_lock);
+
     printk("%s() ok\n", __func__);
     
     return ret;

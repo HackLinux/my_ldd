@@ -8,6 +8,7 @@ max_brightness
 */
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/slab.h>         /**< kmalloc... */
 #include <linux/platform_device.h>
 #include <linux/leds.h>
 
