@@ -14,7 +14,7 @@ static int g_fd = -1;
 
 void sig_handler(int sig)
 {
-    static unsigned long long cnt = 0;
+    static unsigned long long cnt = 1;
 
     printf("hello world sig_handler!!!\n");
     //printf("Siginfo: si_signo = %d, si_code = %x, si_band = %x\n", info->si_signo, info->si_code, info->si_band);
@@ -29,23 +29,7 @@ void trigger_test(void)
 {
     int ret = 0;
 
-    if (g_fd < 0)
-    {
-        printf("Open it!!!\n");
-        g_fd = open(device, O_RDWR);
-    }
-    if (g_fd < 0) {
-        perror("open");
-        exit(1);
-    }
-
-    fcntl(g_fd, F_SETOWN, getpid());
-    fcntl(g_fd, F_SETFL, fcntl(g_fd, F_GETFL) | FASYNC);
-    //fcntl(fd, F_GETSIG);
-    //fcntl(fd, F_SETSIG, SIGRTMIN + 12);
-
     ret = ioctl(g_fd, INT_DEBUG, NULL);
-
     if (ret)
     {
         printf("IOCTL error\n");
@@ -60,17 +44,33 @@ int main(void)
     int ret = 0;
     struct sigaction act;
 
+    // 1、关联驱动
+    if (g_fd < 0)
+    {
+        printf("Open it!!!\n");
+        g_fd = open(device, O_RDWR);
+    }
+    if (g_fd < 0) {
+        perror("open");
+        exit(1);
+    }
+
+    fcntl(g_fd, F_SETOWN, getpid());
+    fcntl(g_fd, F_SETFL, fcntl(g_fd, F_GETFL) | FASYNC);
+
+    // 2.注册响应函数
     memset(&act, 0, sizeof(act));
     act.sa_handler = sig_handler;
     //act.sa_sigaction = new_op;
     //act.sa_flags = SA_SIGINFO;
     act.sa_flags = 0;
     //ret = sigaction(SIGIO, &act, NULL);
-    sigaction(SIGIO, &act, NULL);   // 注册响应函数
+    sigaction(SIGIO, &act, NULL);
     if (ret < 0)
     {
         printf("Install signal error\n");
-        close(g_fd);
+        if (g_fd > 0)
+            close(g_fd);
         g_fd = -1;
         exit(1);
     }
@@ -81,7 +81,7 @@ int main(void)
 
     while (1)
     {
-        trigger_test();
+        //trigger_test();
         sleep(2);
     }
 	return 0;

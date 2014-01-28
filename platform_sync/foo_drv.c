@@ -1,14 +1,15 @@
 /**
  * @file   foo_drv.c
  * @author Late Lee <latelee@163.com>
- * @date   Tue Nov 12 22:21:19 2013
+ * @date   2014.01.28
  * 
  * @brief  platform模型示例
  * 
  * @note   基于platform模型的字符设备驱动示例。
  *         添加异步通知实现。参见同目录测试程序。
  *         添加GPIO转中断实现。检测GPIO状态并触发中断函数。
- * @bug    测试中发现，在ARM上卸载再加载时，内核崩溃了，可能是class退出方面的原因。
+ *         增加工作队列，检测按键超过3秒即通知应用程序。
+ * @bug    测试中发现，在ARM上卸载再加载时，触发中断，内核崩溃了，可能是class退出方面的原因。
  */
 
 #include <linux/module.h>
@@ -26,7 +27,8 @@
 
 #include <linux/signal.h>       /**< POLL_IN... */
 #include <linux/interrupt.h>    /**< irq */
-#include <linux/gpio.h>          /**< gpio */
+#include <linux/gpio.h>         /**< gpio */
+#include <linux/delay.h>
 
 // 避免删掉模块时出现警告
 static void foo_dev_release(struct device* dev)
@@ -54,6 +56,21 @@ static struct platform_device foo_device = {
 #define debug(fmt, ...)
 #endif
 
+// 将常用的放到一起
+struct foo_device
+{
+    char* name;
+    int foo_major;
+    int foo_minor;
+    int foo_nr_devs;
+    dev_t foo_devno;
+
+    struct cdev foo_cdev;
+    struct work_struct detect;
+    struct class* foo_class;
+    struct fasync_struct* my_fasync;
+};
+
 #define DEV_NAME "foo"
 
 // 指定设备号或自动创建设备号
@@ -66,17 +83,20 @@ static struct platform_device foo_device = {
 
 #define FOO_NR_DEVS 1
 
-static struct cdev foo_cdev;
-static int foo_major = DEVICE_MAJOR;
-static int foo_minor = 0;
-static int foo_nr_devs = FOO_NR_DEVS;
-static dev_t foo_devno;
-static struct class* foo_class;
-
-
-static struct fasync_struct *my_fasync = NULL;
+static struct foo_device foo_dev = {
+    .name = DEV_NAME,
+    .foo_major = DEVICE_MAJOR,
+    .foo_minor = 0,
+    .foo_nr_devs = FOO_NR_DEVS,
+    .foo_devno = 0,
+    
+    .my_fasync = NULL,
+    .foo_class = NULL,
+};
 
 #define INT_DEBUG _IOWR('L', 16, int)
+
+#define RST_PIN (32*2 + 21)
     
 static int foo_open(struct inode *inode, struct file *filp)
 {
@@ -117,10 +137,10 @@ static long foo_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     switch (cmd)
     {
         case INT_DEBUG:
-        if (my_fasync)
+        if (foo_dev.my_fasync)
         {
             //printk("--ll debug: ioctl fasync....\n");
-            kill_fasync(&my_fasync, SIGIO, POLL_IN);
+            kill_fasync(&foo_dev.my_fasync, SIGIO, POLL_IN);
         }
         break;
 
@@ -135,7 +155,7 @@ static long foo_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 static int foo_fasync(int fd, struct file *file, int mode)
 {
-	return fasync_helper(fd, file, mode, &my_fasync);
+    return fasync_helper(fd, file, mode, &foo_dev.my_fasync);
 }
 
 static struct file_operations foo_fops = {
@@ -151,22 +171,13 @@ static struct file_operations foo_fops = {
     .fasync  = foo_fasync,
 };
 
-static irqreturn_t my_irq(int irq, void *dev_id)
-{
-    static int cnt = 0;
-    cnt++;
-    printk("in %s count: %d\n", __func__, cnt);
-
-	return IRQ_HANDLED;
-}
-
 static int foo_remove(struct platform_device *dev)
 {
-    unregister_chrdev_region(foo_devno, 1);
-    cdev_del(&foo_cdev);
+    unregister_chrdev_region(foo_dev.foo_devno, 1);
+    cdev_del(&foo_dev.foo_cdev);
 
-    device_destroy(foo_class, foo_devno);
-    class_destroy(foo_class);
+    device_destroy(foo_dev.foo_class, foo_dev.foo_devno);
+    class_destroy(foo_dev.foo_class);
 
 
     //printk(KERN_NOTICE "remove...\n");
@@ -174,12 +185,24 @@ static int foo_remove(struct platform_device *dev)
     return 0;
 }
 
+static irqreturn_t my_irq(int irq, void *dev_id)
+{
+    static int cnt = 0;
+    struct foo_device *foo_dev = dev_id;
+
+    cnt++;
+    printk("in %s count: %d\n", __func__, cnt);
+
+    // 调度
+    schedule_work(&foo_dev->detect);
+    return IRQ_HANDLED;
+}
+
 static int request_gpio(void)
 {
     int gpio_irq_num = 0;
     int ret = 0;
     // 注册中断(恢复参数按键)
-#define RST_PIN (32*2 + 21)
     gpio_irq_num = gpio_to_irq(RST_PIN);
     ret = gpio_request(RST_PIN, "default_pin");
     if (ret)
@@ -191,15 +214,59 @@ static int request_gpio(void)
     if (ret)
         goto err_free_sp;
 
+    // 测试结果：
     // IRQF_TRIGGER_RISING：按下再起来为上升沿
     // IRQF_TRIGGER_FALLING：按下为下降沿
     ret = request_irq(gpio_irq_num, my_irq,
-                    IRQF_TRIGGER_FALLING | IRQF_DISABLED,
-                    "rst", NULL);
+                    IRQF_TRIGGER_FALLING/*|IRQF_TRIGGER_RISING */|IRQF_DISABLED,
+                    "rst", &foo_dev);
+
+    printk("request irq: %d --> %d\n", RST_PIN, gpio_irq_num);
+    return ret;
 err_free_sp:
-		gpio_free(RST_PIN);
+        gpio_free(RST_PIN);
 
     return ret;
+}
+
+// 工作队列
+void foo_waiting(struct work_struct *work)
+{
+    int press_3s = 0;
+    int value = -1;
+    int i = 150;
+
+    struct foo_device *foo_dev =
+        container_of(work, struct foo_device, detect);
+
+    // 按下为0，放开为1
+    value = gpio_get_value(RST_PIN);
+    printk("--ll debug: gpio value: %d\n", value);
+    // 注：这个延时不是很精确。要实际测试过。
+    // 这里大约是3秒左右
+    while (i--)
+    {
+        value = gpio_get_value(RST_PIN);
+        if (value != 0)
+        {
+            printk("--ll debug--- release the key...\n");
+            goto out;
+        }
+        msleep(10);
+    }
+    printk("==ll debug ==You press it 3 seconds.\n");
+    press_3s = 1;
+
+    if (press_3s)
+    {
+        if (foo_dev->my_fasync)
+        {
+            kill_fasync(&foo_dev->my_fasync, SIGIO, POLL_IN);
+        }
+    }
+
+out:
+    return;
 }
 
 static int foo_probe(struct platform_device *dev)
@@ -207,26 +274,26 @@ static int foo_probe(struct platform_device *dev)
     int ret = 0;
 
     // 初始化，关联文件操作结构体
-    cdev_init(&foo_cdev, &foo_fops);
-    foo_cdev.owner = THIS_MODULE;
+    cdev_init(&foo_dev.foo_cdev, &foo_fops);
+    foo_dev.foo_cdev.owner = THIS_MODULE;
 
-    if (foo_major)
+    if (foo_dev.foo_major)
     {
-        foo_devno = MKDEV(foo_major, foo_minor);
-        ret = register_chrdev_region(foo_devno, foo_nr_devs, DEV_NAME);
+        foo_dev.foo_devno = MKDEV(foo_dev.foo_major, foo_dev.foo_minor);
+        ret = register_chrdev_region(foo_dev.foo_devno, foo_dev.foo_nr_devs, foo_dev.name);
     }
     else
     {
-        ret = alloc_chrdev_region(&foo_devno, foo_minor, foo_nr_devs, DEV_NAME); /* get devno */
-        foo_major = MAJOR(foo_devno); /* get major */
+        ret = alloc_chrdev_region(&foo_dev.foo_devno, foo_dev.foo_minor, foo_dev.foo_nr_devs, foo_dev.name); /* get devno */
+        foo_dev.foo_major = MAJOR(foo_dev.foo_devno); /* get major */
     }
     if (ret < 0)
     {
-        dev_err(&foo_device.dev, "can't get major %d\n", foo_major);
+        dev_err(&foo_device.dev, "can't get major %d\n", foo_dev.foo_major);
         return -EINVAL;
     }
     
-    ret = cdev_add(&foo_cdev, foo_devno, 1);
+    ret = cdev_add(&foo_dev.foo_cdev, foo_dev.foo_devno, 1);
     if (ret < 0)
     {
         dev_err(&foo_device.dev, "cdev_add failure!\n");
@@ -234,18 +301,22 @@ static int foo_probe(struct platform_device *dev)
     }
 
     // 自动创建/dev下的节点，名称为DEV_NAME
-    foo_class = class_create(THIS_MODULE, DEV_NAME);
-    if (IS_ERR(foo_class))
+    foo_dev.foo_class = class_create(THIS_MODULE, foo_dev.name);
+    if (IS_ERR(foo_dev.foo_class))
     {
         dev_err(&foo_device.dev, "failed to create class.\n");
         return -EINVAL;
     }
 
-    device_create(foo_class, NULL, foo_devno, NULL, DEV_NAME);
+    device_create(foo_dev.foo_class, NULL, foo_dev.foo_devno, NULL, foo_dev.name);
 
     request_gpio();
 
-    dev_info(&foo_device.dev, "Register /dev/%s ok: major: %d minor: %d devno: 0x%08x\n", DEV_NAME, foo_major, foo_minor, foo_devno);
+    // 初始化工作队列
+    INIT_WORK(&foo_dev.detect, foo_waiting);
+
+    dev_info(&foo_device.dev, "Register /dev/%s ok: major: %d minor: %d devno: 0x%08x\n", 
+            foo_dev.name, foo_dev.foo_major, foo_dev.foo_minor, foo_dev.foo_devno);
 
     return ret;
 }
@@ -279,7 +350,7 @@ static int __init foo_drv_init(void)
         return ret;
     }
     
-    dev_info(&foo_device.dev, "Init %s OK!\n", DEV_NAME);
+    dev_info(&foo_device.dev, "Init %s OK!\n", foo_dev.name);
     
     return ret;
 }
