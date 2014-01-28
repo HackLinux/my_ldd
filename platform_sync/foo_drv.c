@@ -173,6 +173,8 @@ static struct file_operations foo_fops = {
 
 static int foo_remove(struct platform_device *dev)
 {
+    cancel_work_sync(&foo_dev.detect);
+
     unregister_chrdev_region(foo_dev.foo_devno, 1);
     cdev_del(&foo_dev.foo_cdev);
 
