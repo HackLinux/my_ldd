@@ -148,7 +148,7 @@ int PCI_AutoDetect()
 					(( dwResult >> 16   ) == INTEL_E3815_SMBUS_DEVICE_ID ))						//	0x0F12
 				{
 					printk("AutoDetect_IOBase : Intel E3815 SMBus Controller Found IOAddr: %x ... \n", dwIOAddr);
-					return Get_E3815_SMBusIoAddr(dwIOAddr);
+					return Get_E3845_SMBusIoAddr(dwIOAddr);
 				}
 			}
 		}
@@ -180,7 +180,7 @@ int PCI_DetectBaytrail(void)
             (( dwResult >> 16   ) == INTEL_E3815_SMBUS_DEVICE_ID ))						//	0x0F12
         {
             printk("AutoDetect_IOBase : Intel E3815 SMBus Controller Found IOAddr: %x ... \n", dwIOAddr);
-            return Get_E3815_SMBusIoAddr(dwIOAddr);
+            return Get_E3845_SMBusIoAddr(dwIOAddr);
         }
         udelay(10);
     }
@@ -189,7 +189,7 @@ int PCI_DetectBaytrail(void)
 	return FALSE;
 }
 
-int Get_E3815_SMBusIoAddr(uint32_t dwIOAddr)
+int Get_E3845_SMBusIoAddr(uint32_t dwIOAddr)
 {
 	uint32_t dwResult;
     

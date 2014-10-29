@@ -180,7 +180,7 @@ static int __init f75111_drv_init(void)
     F75111_Init();
     
     // 暂时不要狗先
-#define 0
+#if 0
     F75111_SetWDTEnable(120);
     g_wdt_enable = 1;
 #endif
