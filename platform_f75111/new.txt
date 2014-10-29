@@ -1,0 +1,219 @@
+写这篇文章起因缘于自己的无知。
+
+那个很牛的同事还未离职前，我们组被领导挖了个坑，四个不知天高地厚的小伙伴傻傻地接受了——去抄人家的板子，做一个项目，说让我们组挑大梁。回想起来，真是一把辛酸泪。
+
+自从使用了那个同事移植的内核后，发现内核十分强大，许多驱动已经集成了——原谅我的无知，最近的两年时间里，完全没接触过内核，只是跟内核提供的接口打交道，我只知道使用open、ioctl、close，其它就不知了。当然，通过这几天的自学，也了解了当前内核(准确说是“当前几年”)的发展情况，不至于像当初那样的天真了。
+
+内核已经集成了很多驱动，很多都成了子系统了，像我最近看的gpio、led、i2c、spi。就是说，人家已经做好了一个框架在那里，只有符合它的使用条件，都可以用。
+
+闲话不多说，真正了解了sysfs是那个内核提供的led点灯方式，我一直停留在以前s3c2440时代用的ioctl，不知道可以通过sysfs来访问内核空间，也不知道内核已经做好了led框架，认为直接用echo能让led亮灯，真的太神奇了。本篇文章主要讲一个简单的通过sysfs，就能用cat、echo命令访问内核空间的例子。
+
+1、注册platform驱动，不多说。
+
+2、通过class_create、device_create_file创建属性文件
+
+foo_class = class_create(THIS_MODULE, "foo");
+
+device_create_file(&foo_device.dev, &dev_attr_foobar);
+
+class_create是在paltform目录生成foo设备目录，device_create_file创建文件foobar，第二个参数是device_attribute结构体。在代码中是不会直接声明dev_attr_foobar的，它是通过DEVICE_ATTR来声明——当初，我还一直纠结这个宏该怎么用。
+
+3、通过DEVICE_ATTR声明属性文件，关联操作函数；
+
+static DEVICE_ATTR(foobar, 0666, foobar_show, foobar_store);
+
+代码使用的dev_attr_foobar就是用DEVICE_ATTR声明的，这个宏的定义如下(位于linux/device.h)：
+
+#define DEVICE_ATTR(_name, _mode, _show, _store) \
+struct device_attribute dev_attr_##_name = __ATTR(_name, _mode, _show, _store)
+
+可以看到，用这个宏声明的device_attribute，会添加前缀dev_attr_，这便是上面dev_attr_foobar的由来。关于这个宏及__ATTR宏，可以跟踪内核代码。
+
+foobar是sysfs中使用的文件名称。0666是该文件属性，为了方便，我将它声明了所有的人都能读、写。foobar_show和foobar_store分别是读、写的函数，即用命令cat和echo分别调用的函数。
+
+4、实现关联函数；
+
+下面是实现代码：
+
+/**
+ * @file   sysfs_drv.c
+ * @author Late Lee <latelee@163.com>
+ * @date   Tue Nov 12 22:21:19 2013
+ * 
+ * @brief  sysfs测试示例
+ * 
+ * @note   
+ */
+
+#include <linux/module.h>
+#include <linux/kernel.h>       /**< printk() */
+#include <linux/init.h>
+#include <linux/platform_device.h>
+
+#include <linux/cdev.h>         /**< cdev_* */
+#include <linux/fs.h>
+#include <asm/uaccess.h>        /**< copy_*_user */
+
+#include <linux/types.h>        /**< size_t */
+#include <linux/errno.h>        /**< error codes */
+#include <linux/string.h>
+#include <linux/ctype.h>
+
+static void foo_dev_release(struct device* dev)
+{
+    return;
+}
+
+// platform设备
+static struct platform_device foo_device = {
+    .name    = "foo",
+    .id      = -1,
+    .dev     = {
+        //.platform_data = &foo_pdata,
+        .release = &foo_dev_release,
+    },
+};
+
+#define DEBUG
+
+#ifdef DEBUG
+/* KERN_INFO */
+#define debug(fmt, ...) printk(KERN_NOTICE fmt, ##__VA_ARGS__)
+#else
+#define debug(fmt, ...)
+#endif
+
+static struct class* foo_class;
+
+
+static int user_data = 250;
+
+// cat foobar　调用此函数
+static ssize_t foobar_show(struct device *dev, 
+		struct device_attribute *attr, char *buf)
+{
+	printk("set data to user space: %d\n", user_data);
+	return sprintf(buf, "%u\n", user_data);
+}
+
+// echo 111 > foobar　调用此函数
+static ssize_t foobar_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	unsigned long state = simple_strtoul(buf, NULL, 10);
+	user_data = state;
+	printk("got data from user space: %d %d\n", (unsigned int)state, user_data);
+	// 一定要返回size，否则会一直执行
+	return size;
+}
+
+// 生成文件为foobar
+static DEVICE_ATTR(foobar, 0666, foobar_show, foobar_store);
+
+static int foo_remove(struct platform_device *dev)
+{
+	device_remove_file(&foo_device.dev, &dev_attr_foobar);
+
+    class_destroy(foo_class);
+
+    //printk(KERN_NOTICE "remove...\n");
+
+    return 0;
+}
+
+static int foo_probe(struct platform_device *dev)
+{
+    int ret = 0;
+
+    foo_class = class_create(THIS_MODULE, "foo");
+    if (IS_ERR(foo_class))
+    {
+        dev_err(&foo_device.dev, "failed to create class.\n");
+        return PTR_ERR(foo_class);
+    }
+
+	ret = device_create_file(&foo_device.dev, &dev_attr_foobar);
+	if (ret)
+		goto err_out;
+
+err_out:
+    return ret;
+}
+
+// driver
+static struct platform_driver foo_driver = {
+    .probe        = foo_probe,
+    .remove        = foo_remove,
+    .driver        = {
+        .name        = "foo",
+        .owner        = THIS_MODULE,
+    },
+};
+
+static int __init foo_drv_init(void)
+{
+    int ret = 0;
+
+    // 先注册设备(适用于静态定义设备结构体)
+    ret = platform_device_register(&foo_device);
+    if (ret)
+    {
+        dev_err(&foo_device.dev, "platform_device_register failed!\n");
+        return ret;
+    }
+    // 再注册驱动
+    ret = platform_driver_register(&foo_driver);
+    if (ret)
+    {
+        dev_err(&foo_device.dev, "platform_driver_register failed!\n");
+        return ret;
+    }
+    dev_info(&foo_device.dev, "init OK!\n");
+    return ret;
+}
+
+static void __exit foo_drv_exit(void)
+{
+    // 先卸载驱动
+    platform_driver_unregister(&foo_driver);
+    // 再卸载设备
+    platform_device_unregister(&foo_device);
+
+	printk("exit OK!\n");
+}
+
+module_init(foo_drv_init);
+module_exit(foo_drv_exit);
+
+MODULE_AUTHOR("Late Lee");
+MODULE_DESCRIPTION("Simple platform driver");
+MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:foo");
+
+
+注意点：
+
+在实现foobar_store时，习惯性将其返回值写成0，测试时发现echo 1> foobar一直在执行，没有返回。经参考其它的内核代码，才发现一定要返回size才行。
+
+用户层测试：
+
+[latelee@latelee foo]$ pwd
+/sys/devices/platform/foo
+[latelee@latelee foo]$ ls
+driver  foobar  modalias  power  subsystem  uevent
+[latelee@latelee foo]$ cat foobar 
+250
+[latelee@latelee foo]$ echo 110 > foobar 
+[latelee@latelee foo]$ cat foobar 
+110
+[latelee@latelee foo]$
+
+内核打印：
+
+foo foo: init OK!
+set data to user space: 250
+got data from user space: 110 110
+set data to user space: 110
+exit OK!
+
+ 

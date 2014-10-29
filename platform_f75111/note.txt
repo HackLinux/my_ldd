@@ -1,0 +1,19 @@
+[latelee@latelee foo]$ pwd
+/sys/devices/platform/foo
+[latelee@latelee foo]$ ls
+driver  foobar  modalias  power  subsystem  uevent
+[latelee@latelee foo]$ cat foobar 
+250
+[latelee@latelee foo]$ echo 110 > foobar 
+[latelee@latelee foo]$ cat foobar 
+110
+[latelee@latelee foo]$ 
+
+
+
+ÄÚºË£º
+foo foo: init OK!
+set data to user space: 250
+got data from user space: 110 110
+set data to user space: 110
+exit OK!
